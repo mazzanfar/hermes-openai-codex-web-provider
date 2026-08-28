@@ -1,5 +1,5 @@
 name: openai-codex-web
-version: 1.0.0
+version: 1.0.1
 manifest_version: 2
 api_version: 1
 description: "OpenAI Codex web search through the native Responses web_search tool using Hermes-managed ChatGPT/Codex OAuth"
