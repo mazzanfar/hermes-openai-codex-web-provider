@@ -38,7 +38,7 @@ plugins:
   entries:
     openai-codex-web:
       settings:
-        model: gpt-5.6
+        model: gpt-5.6-terra
         timeout: 90
 
 web:
