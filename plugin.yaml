@@ -1,0 +1,26 @@
+name: openai-codex-web
+version: 1.0.0
+manifest_version: 2
+api_version: 1
+description: "OpenAI Codex web search through the native Responses web_search tool using Hermes-managed ChatGPT/Codex OAuth"
+author: "Maximilian Ghazanfar"
+kind: backend
+provides_web_providers:
+  - openai-codex-web
+python_dependencies:
+  - "httpx>=0.28,<0.29"
+config_schema:
+  model:
+    type: str
+    required: true
+    description: "Codex model ID available to the authenticated ChatGPT account"
+  timeout:
+    type: int
+    default: 90
+    description: "Search request timeout in seconds"
+license: MIT
+homepage: "https://github.com/mazzanfar/hermes-openai-codex-web-provider"
+tags:
+  - web-search
+  - openai
+  - codex
