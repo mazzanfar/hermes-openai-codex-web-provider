@@ -184,15 +184,85 @@ def test_search_normalizes_json_results(monkeypatch):
 
     result = codex_provider.CodexWebSearchProvider().search("official documentation", limit=5)
 
-    assert result == {
-        "success": True,
-        "data": {"web": [{
-            "title": "Original",
-            "url": "https://example.com/original",
-            "description": "Primary source.",
-            "position": 1,
-        }]},
+    assert result["success"] is True
+    assert result["data"]["web"] == [{
+        "title": "Original",
+        "url": "https://example.com/original",
+        "description": "Primary source.",
+        "position": 1,
+    }]
+    assert result["provenance"]["complete"] is False
+
+
+def test_search_preserves_redacted_terminal_responses_provenance(monkeypatch):
+    """Configured model is not sufficient: retain terminal response facts."""
+    from hermes_openai_codex_web_provider import provider as codex_provider
+
+    payload = _response_payload(json.dumps({"results": []}), sources=[])
+    payload.update({
+        "id": "resp_nonsecret_identifier",
+        "model": "gpt-5.6-terra",
+        "status": "completed",
+        "_hermes_auth_refresh_attempts": 1,
+    })
+    monkeypatch.setattr(
+        codex_provider.CodexWebSearchProvider,
+        "_request",
+        classmethod(lambda cls, *args, **kwargs: payload),
+    )
+    monkeypatch.setattr(
+        codex_provider,
+        "_load_codex_web_config",
+        lambda: {"model": "gpt-5.6-terra"},
+    )
+
+    result = codex_provider.CodexWebSearchProvider().search("current facts", limit=5)
+
+    assert result["provenance"] == {
+        "provider": "openai-codex-web",
+        "requested_model": "gpt-5.6-terra",
+        "response_model": "gpt-5.6-terra",
+        "terminal_status": "completed",
+        "response_id": "resp_nonsecret_identifier",
+        "native_web_search_invoked": True,
+        "auth_refresh_attempts": 1,
+        "complete": True,
     }
+
+
+def test_search_marks_provenance_incomplete_without_terminal_model(monkeypatch):
+    from hermes_openai_codex_web_provider import provider as codex_provider
+
+    payload = _response_payload(json.dumps({"results": []}), sources=[])
+    monkeypatch.setattr(
+        codex_provider.CodexWebSearchProvider,
+        "_request",
+        classmethod(lambda cls, *args, **kwargs: payload),
+    )
+
+    result = codex_provider.CodexWebSearchProvider().search("current facts", limit=5)
+
+    assert result["success"] is True
+    assert result["provenance"]["requested_model"] == "gpt-5.4-mini"
+    assert result["provenance"]["response_model"] is None
+    assert result["provenance"]["complete"] is False
+
+
+def test_search_marks_provenance_incomplete_when_terminal_model_mismatches(monkeypatch):
+    from hermes_openai_codex_web_provider import provider as codex_provider
+
+    payload = _response_payload(json.dumps({"results": []}), sources=[])
+    payload["model"] = "gpt-5.6-luna"
+    monkeypatch.setattr(
+        codex_provider.CodexWebSearchProvider,
+        "_request",
+        classmethod(lambda cls, *args, **kwargs: payload),
+    )
+
+    result = codex_provider.CodexWebSearchProvider().search("current facts", limit=5)
+
+    assert result["provenance"]["response_model"] == "gpt-5.6-luna"
+    assert result["provenance"]["complete"] is False
 
 
 def test_search_falls_back_to_citations_and_sources(monkeypatch):
@@ -476,12 +546,13 @@ def test_request_refreshes_once_after_401(monkeypatch):
 
     monkeypatch.setattr("hermes_cli.auth.resolve_codex_runtime_credentials", resolve)
 
-    codex_provider.CodexWebSearchProvider._request(
+    response = codex_provider.CodexWebSearchProvider._request(
         "query", limit=5, model="gpt-5.4-mini", timeout_seconds=90,
     )
 
     assert refresh_flags == [False, True]
     assert _FakeClient.calls[1]["client"]["headers"]["Authorization"] == "Bearer fresh-token"
+    assert response["_hermes_auth_refresh_attempts"] == 1
 
 
 def test_incomplete_stream_is_a_failure():
