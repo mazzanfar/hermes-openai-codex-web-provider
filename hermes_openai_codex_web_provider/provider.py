@@ -53,7 +53,8 @@ def _resolve_model(
     plugin_id: str = PLUGIN_ID,
 ) -> str:
     """Return the explicitly configured Codex search model."""
-    value = (config if config is not None else _load_codex_web_config()).get("model")
+    resolved = config if config is not None else _load_codex_web_config()
+    value = resolved.get("model")
     if isinstance(value, str) and value.strip():
         model = value.strip()
         from agent.model_metadata import strip_codex_context_variant_suffix
@@ -307,9 +308,10 @@ class CodexWebSearchProvider(WebSearchProvider):
     def _load_config(self) -> Dict[str, Any]:
         if self._config_getter is None:
             return _load_codex_web_config()
+        timeout = self._config_getter("timeout")
         return {
             "model": self._config_getter("model"),
-            "timeout": self._config_getter("timeout", DEFAULT_TIMEOUT),
+            "timeout": DEFAULT_TIMEOUT if timeout is None else timeout,
         }
 
 
@@ -345,6 +347,7 @@ class CodexWebSearchProvider(WebSearchProvider):
         except (TypeError, ValueError):
             safe_limit = 5
 
+        model = ""
         try:
             cfg = self._load_config()
             model = _resolve_model(cfg, plugin_id=self._plugin_id)
@@ -372,6 +375,9 @@ class CodexWebSearchProvider(WebSearchProvider):
         return {
             "success": True,
             "data": {"web": self._extract_results(response_data, limit=safe_limit)},
+            "provenance": self._redacted_terminal_provenance(
+                response_data, requested_model=model
+            ),
         }
 
     @classmethod
@@ -471,7 +477,12 @@ class CodexWebSearchProvider(WebSearchProvider):
                                 f"Codex web search returned HTTP {response.status_code}: "
                                 f"{detail}"
                             ) from exc
-                        return _stream_response_payload(response)
+                        response_data = _stream_response_payload(response)
+                        # This is internal accounting, not OAuth material.  It
+                        # lets the public result say whether this exact request
+                        # needed the one permitted same-provider refresh.
+                        response_data["_hermes_auth_refresh_attempts"] = attempt
+                        return response_data
             except httpx.RequestError as exc:
                 raise RuntimeError(f"Could not reach OpenAI Codex: {exc}") from exc
 
@@ -501,6 +512,55 @@ class CodexWebSearchProvider(WebSearchProvider):
             isinstance(item, dict) and item.get("type") == "web_search_call"
             for item in output
         )
+
+    @classmethod
+    def _redacted_terminal_provenance(
+        cls,
+        response_data: Dict[str, Any],
+        *,
+        requested_model: str,
+    ) -> Dict[str, Any]:
+        """Keep only non-secret terminal Responses facts needed for audit."""
+        response_model = response_data.get("model")
+        response_model = (
+            response_model.strip()
+            if isinstance(response_model, str) and response_model.strip()
+            else None
+        )
+        terminal_status = response_data.get("status")
+        terminal_status = (
+            terminal_status.strip()
+            if isinstance(terminal_status, str) and terminal_status.strip()
+            else None
+        )
+        response_id = response_data.get("id")
+        response_id = (
+            response_id.strip()
+            if isinstance(response_id, str) and response_id.strip()
+            else None
+        )
+        try:
+            auth_refresh_attempts = int(
+                response_data.get("_hermes_auth_refresh_attempts", 0)
+            )
+        except (TypeError, ValueError):
+            auth_refresh_attempts = 0
+        auth_refresh_attempts = max(0, min(auth_refresh_attempts, 1))
+        native_web_search_invoked = cls._has_native_search_call(response_data)
+        return {
+            "provider": PLUGIN_ID,
+            "requested_model": requested_model,
+            "response_model": response_model,
+            "terminal_status": terminal_status,
+            "response_id": response_id,
+            "native_web_search_invoked": native_web_search_invoked,
+            "auth_refresh_attempts": auth_refresh_attempts,
+            "complete": bool(
+                response_model == requested_model
+                and terminal_status == "completed"
+                and native_web_search_invoked
+            ),
+        }
 
 
     @classmethod
